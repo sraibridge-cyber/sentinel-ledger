@@ -3,7 +3,7 @@
 
 Usage: python3 verify_ledger.py ledger.jsonl [saved_head_hash]
 
-Checks every record's link to the one before it, recomputes each payload hash and record hash,
+Checks the first record is GENESIS, every record's link to the one before it, recomputes each payload hash and record hash,
 and, if given, compares the final hash with the head hash the owner saved off the phone.
 Payload values must be strings, booleans, integers or null (floats are not canonicalised here).
 """
@@ -69,6 +69,8 @@ def main():
     prev_hash, prev_seq, last_hash = GENESIS_PREV, 0, None
     for r in records:
         n = r["seq"]
+        if n == 1 and r["type"] != "GENESIS":
+            return fail(n, "first record is not GENESIS, so this is not a Sentinel Ledger log")
         if n != prev_seq + 1:
             return fail(n, "sequence jumps from %d to %d (a record is missing or reordered)" % (prev_seq, n))
         if r["prevHash"] != prev_hash:

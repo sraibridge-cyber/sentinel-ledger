@@ -272,6 +272,8 @@ class LedgerService : Service() {
     }
 
     // Reads the foreground timeline only if the owner has granted usage access. Otherwise returns nothing.
+    // minSdk is 26, so the pre-29 usage and app-op calls stay for older phones. They are deprecated, not removed.
+    @Suppress("DEPRECATION")
     private fun foregroundTimeline(from: Long, to: Long): List<ForegroundInterval> {
         val ops = getSystemService(AppOpsManager::class.java)
         val granted = ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName) ==
@@ -287,7 +289,8 @@ class LedgerService : Service() {
             when (e.eventType) {
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> { currentPkg = e.packageName; currentStart = e.timeStamp }
                 UsageEvents.Event.MOVE_TO_BACKGROUND -> {
-                    if (currentPkg != null) out.add(ForegroundInterval(currentPkg!!, currentStart, e.timeStamp))
+                    val pkg = currentPkg
+                    if (pkg != null) out.add(ForegroundInterval(pkg, currentStart, e.timeStamp))
                     currentPkg = null
                 }
             }
