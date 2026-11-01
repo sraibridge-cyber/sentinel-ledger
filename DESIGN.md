@@ -43,6 +43,8 @@ Each alert is a flag, not a verdict. The app should say what changed and let the
 
 **Decision (Kyle, Q4, from his earlier answer):** background running is permission-based. It stays off unless the owner grants it, and the owner can revoke it.
 
+**Decision (Kyle, Q6):** rules first, no AI detector. With permission, the app runs in the background, logs every reading and event, and alerts the owner. It alerts and logs; it never changes device settings or data. A login or unlock summary shows alerts since the owner last looked.
+
 ## Scoring
 
 The CC and SS framework (see the Drive report, Technical Report v3) can score consistency, but only after a reference set exists to set a threshold. Until then the app shows no pass or fail. Any score is a consistency measure, not evidence of monitoring.
@@ -82,3 +84,20 @@ Limits to state in the app, not hide:
 3. **Alerts:** which changes should notify the owner immediately, and which should only be logged?
 4. ~~Repository~~ Answered (Kyle, Q5): a new public repository, starting with this design document only.
 5. ~~Name~~ Answered (Kyle): the app is called Sentinel Ledger. "Aegis-Shield" stays the shield project; SIMM stays the readings tool.
+
+
+## Mapper (Kyle's note)
+
+Each sensor event answers two questions for the owner: what happened, and when. It also says what Android reported and who may have made the request.
+
+- A sensor event carries the sensor, start or stop, the time, whether the screen was on, and any detail Android gives (for example a camera id).
+- If the owner grants usage access, the mapper can say which app was in the foreground at that moment. That is a clue, not proof the app made the request, and the log says so.
+- If no app was in the foreground, or usage access is off, the log says the requester is not known. It never invents one.
+- The mapper tracks nothing outside the device. Nothing about the request leaves the phone, and no other party is identified.
+
+## Alerts and logging (Kyle, Q3 and Q6)
+
+- Intrusive or extractive use (for example a sensor started while the screen is off, or a watched setting changed) raises an immediate alert.
+- Each alert names the reading and the rule it broke. It never names a cause.
+- The app alerts and logs. It never changes device settings or data.
+- Rules come first. No AI detector until there are labelled examples.
