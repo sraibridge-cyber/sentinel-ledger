@@ -19,6 +19,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.os.Process
 import io.csslabs.sdk.Chain
 import io.csslabs.sdk.ChainRecord
@@ -42,6 +43,14 @@ class LedgerService : Service() {
     private var screenOn = true
     private val micActive = HashSet<String>()
     private val cameraBusy = HashSet<String>()
+    private val beatIntervalMs = 300_000L
+    private val beat = object : Runnable {
+        override fun run() {
+            append("HEARTBEAT", "alive", linkedMapOf(
+                "elapsedMs" to SystemClock.elapsedRealtime(), "wallMs" to System.currentTimeMillis()))
+            handler.postDelayed(this, beatIntervalMs)
+        }
+    }
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -84,9 +93,11 @@ class LedgerService : Service() {
         getSystemService(AudioManager::class.java).registerAudioRecordingCallback(audioCallback, handler)
         getSystemService(CameraManager::class.java).registerAvailabilityCallback(cameraCallback, handler)
         startAsForeground()
+        handler.post(beat)
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(beat)
         unregisterReceiver(screenReceiver)
         getSystemService(AudioManager::class.java).unregisterAudioRecordingCallback(audioCallback)
         getSystemService(CameraManager::class.java).unregisterAvailabilityCallback(cameraCallback)
