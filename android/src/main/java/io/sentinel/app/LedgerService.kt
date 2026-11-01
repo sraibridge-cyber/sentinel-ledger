@@ -26,6 +26,11 @@ import io.csslabs.sdk.ChainRecord
 import io.csslabs.sdk.CsJson
 import io.csslabs.sdk.FileLogStore
 import io.sentinel.core.Alerts
+import io.sentinel.core.Baseline
+import io.sentinel.core.Calibration
+import io.sentinel.core.CalibrationResult
+import io.sentinel.core.Reading
+import io.sentinel.core.Verdict
 import io.sentinel.core.Change
 import io.sentinel.core.ForegroundInterval
 import io.sentinel.core.Mapper
@@ -94,13 +99,18 @@ class LedgerService : Service() {
         getSystemService(AudioManager::class.java).registerAudioRecordingCallback(audioCallback, handler)
         getSystemService(CameraManager::class.java).registerAvailabilityCallback(cameraCallback, handler)
         startAsForeground()
+        wall0 = System.currentTimeMillis()
+        elapsed0 = SystemClock.elapsedRealtime()
+        loadBaseline()
         handler.post(beat)
         handler.post(probe)
+        handler.postDelayed(reading, READING_EVERY_MS)
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(beat)
         handler.removeCallbacks(probe)
+        handler.removeCallbacks(reading)
         unregisterReceiver(screenReceiver)
         getSystemService(AudioManager::class.java).unregisterAudioRecordingCallback(audioCallback)
         getSystemService(CameraManager::class.java).unregisterAvailabilityCallback(cameraCallback)
@@ -151,6 +161,93 @@ class LedgerService : Service() {
             "afterMeanMicros" to (tax.afterMeanMs * 1000).toLong(),
             "deltaMicros" to (tax.deltaMs * 1000).toLong(),
         ))
+    }
+
+    companion object {
+        const val EXTRA_CALIBRATE = "calibrate"
+        const val READING_EVERY_MS = 60_000L
+    }
+
+    // Calibration state. Readings are held in memory only: if the service stops mid-calibration, it starts over.
+    private var baseline: Baseline? = null
+    private var calibrating = false
+    private val readings = ArrayList<Reading>()
+    private var wall0 = 0L
+    private var elapsed0 = 0L
+
+    private val reading = object : Runnable {
+        override fun run() {
+            val sample = currentReading()
+            val b = baseline
+            if (calibrating) {
+                readings.add(sample)
+                finishCalibrationIfReady()
+            } else if (b != null) {
+                checkAgainstBaseline(b, sample)
+            }
+            handler.postDelayed(this, READING_EVERY_MS)
+        }
+    }
+
+    // Timer lateness (ms) from the probe, and how far the wall clock has drifted from the steady clock since start.
+    private fun currentReading(): Reading {
+        val timerMs = if (probeBuffer.isEmpty()) 0.0 else probeBuffer.average() / 1000.0
+        val skewMs = (System.currentTimeMillis() - wall0) - (SystemClock.elapsedRealtime() - elapsed0)
+        return Reading(timerLatenessMs = timerMs, clockSkewMs = skewMs.toDouble())
+    }
+
+    private fun micro(v: Double): Long = (v * 1_000_000).toLong()
+
+    // Restores the last sealed baseline from the log, so a restart does not forget it.
+    private fun loadBaseline() {
+        val last = log.all().lastOrNull { it.type == "CALIBRATION" } ?: return
+        val p = last.payload
+        fun n(key: String): Long = (p[key] as Number).toLong()
+        baseline = Baseline(
+            samples = n("samples").toInt(),
+            tauMu = n("tauMicro") / 1_000_000.0,
+            muMin = n("muMinMicro") / 1_000_000.0,
+            muMedian = n("muMedianMicro") / 1_000_000.0,
+            mappingVersion = p["mappingVersion"] as String,
+            note = p["note"] as String,
+        )
+    }
+
+    private fun finishCalibrationIfReady() {
+        val result = Calibration.build(readings)
+        if (result !is CalibrationResult.Ready) return
+        val b = result.baseline
+        baseline = b
+        calibrating = false
+        append("CALIBRATION", "baseline set from ${b.samples} readings", linkedMapOf(
+            "samples" to b.samples.toLong(),
+            "tauMicro" to micro(b.tauMu),
+            "muMinMicro" to micro(b.muMin),
+            "muMedianMicro" to micro(b.muMedian),
+            "mappingVersion" to b.mappingVersion,
+            "note" to b.note,
+        ))
+    }
+
+    // Logs only. A reading outside the baseline is not an alert: it is a difference the owner can look at.
+    private fun checkAgainstBaseline(b: Baseline, sample: Reading) {
+        val (mu, verdict) = Calibration.check(b, sample)
+        append("BASELINE", verdict.name.lowercase().replace('_', ' '), linkedMapOf(
+            "verdict" to verdict.name,
+            "muMicro" to micro(mu),
+            "tauMicro" to micro(b.tauMu),
+            "note" to "Compared with this phone's own baseline. Not a judgement about who is watching.",
+        ))
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val wantsCalibration = intent?.getBooleanExtra(EXTRA_CALIBRATE, false) == true
+        if (wantsCalibration && baseline == null && !calibrating) {
+            calibrating = true
+            readings.clear()
+            append("CALIBRATION_START", "owner confirmed the phone is clean; calibration started", linkedMapOf("ownerConfirmed" to true))
+        }
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
