@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- No INTERNET permission. Usage access is optional and granted by the owner in Android settings. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" xmlns:tools="http://schemas.android.com/tools" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <application android:allowBackup="false" android:label="Sentinel Ledger">
         <activity android:name=".LedgerActivity" android:exported="true">
             <intent-filter>
@@ -11,6 +13,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <service android:name=".LedgerService" android:exported="false" />
+        <service android:name=".LedgerService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Records sensor start and stop events that the owner chose to record" />
+        </service>
     </application>
 </manifest>

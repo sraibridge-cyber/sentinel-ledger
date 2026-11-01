@@ -30,6 +30,7 @@ import io.sentinel.core.Change
 import io.sentinel.core.ForegroundInterval
 import io.sentinel.core.Mapper
 import io.sentinel.core.Requester
+import io.sentinel.core.Tax
 import io.sentinel.core.Sensor
 import io.sentinel.core.SensorEvent
 import java.io.File
@@ -94,15 +95,62 @@ class LedgerService : Service() {
         getSystemService(CameraManager::class.java).registerAvailabilityCallback(cameraCallback, handler)
         startAsForeground()
         handler.post(beat)
+        handler.post(probe)
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(beat)
+        handler.removeCallbacks(probe)
         unregisterReceiver(screenReceiver)
         getSystemService(AudioManager::class.java).unregisterAudioRecordingCallback(audioCallback)
         getSystemService(CameraManager::class.java).unregisterAvailabilityCallback(cameraCallback)
         append("STOPPED", "Monitoring stopped; events after this point are not recorded", linkedMapOf())
         super.onDestroy()
+    }
+
+    // Timer lateness probe: every second, how late a 200 ms timer fires (in microseconds).
+    private val probeIntervalMs = 1_000L
+    private val probeBuffer = ArrayDeque<Long>()
+    private val pendingTax = ArrayList<PendingTax>()
+
+    private class PendingTax(val eventSeq: Long, val before: List<Long>, val after: MutableList<Long>)
+
+    private val probe = object : Runnable {
+        override fun run() {
+            val t0 = SystemClock.uptimeMillis()
+            handler.postDelayed({
+                val lateMicros = (SystemClock.uptimeMillis() - t0 - 200L) * 1000L
+                probeBuffer.addLast(lateMicros)
+                if (probeBuffer.size > 10) probeBuffer.removeFirst()
+                for (p in pendingTax.toList()) {
+                    p.after.add(lateMicros)
+                    if (p.after.size >= 10) {
+                        pendingTax.remove(p)
+                        finishTax(p)
+                    }
+                }
+            }, 200L)
+            handler.postDelayed(this, probeIntervalMs)
+        }
+    }
+
+    // Keeps the timing before a start, then 10 samples after it, and records the change as a TAX record.
+    private fun beginTax(eventSeq: Long) {
+        pendingTax.add(PendingTax(eventSeq, probeBuffer.toList(), ArrayList()))
+    }
+
+    private fun finishTax(p: PendingTax) {
+        val tax = Tax.around(p.before.map { it / 1000.0 }, p.after.map { it / 1000.0 })
+        if (tax == null) {
+            append("TAX", "no timing before this event; no cost recorded", linkedMapOf("eventSeq" to p.eventSeq))
+            return
+        }
+        append("TAX", tax.note, linkedMapOf(
+            "eventSeq" to p.eventSeq,
+            "beforeMeanMicros" to (tax.beforeMeanMs * 1000).toLong(),
+            "afterMeanMicros" to (tax.afterMeanMs * 1000).toLong(),
+            "deltaMicros" to (tax.deltaMs * 1000).toLong(),
+        ))
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -115,10 +163,11 @@ class LedgerService : Service() {
             is Requester.InferredForeground -> "foreground: ${r.packageName}"
             Requester.NotKnown -> "requester not reported by Android"
         }
-        append("SENSOR", "${sensor.name.lowercase()} ${change.name.lowercase()}; $who", linkedMapOf(
+        val sensorRec = append("SENSOR", "${sensor.name.lowercase()} ${change.name.lowercase()}; $who", linkedMapOf(
             "sensor" to sensor.name, "change" to change.name, "screenOn" to screenOn,
             "androidDetail" to detail, "requester" to who, "note" to attribution.note,
         ))
+        if (change == Change.START) beginTax(sensorRec.seq)
         for (alert in Alerts.forSensor(attribution)) {
             append("ALERT", alert.rule, linkedMapOf("rule" to alert.rule, "reason" to alert.reason))
             notifyOwner(alert.reason)
@@ -150,12 +199,12 @@ class LedgerService : Service() {
         return out
     }
 
-    private fun append(type: String, summary: String, payload: Map<String, Any?>) {
+    private fun append(type: String, summary: String, payload: Map<String, Any?>): ChainRecord {
         val ts = Instant.ofEpochMilli(System.currentTimeMillis()).toString()
         for (attempt in 1..5) {
             val head: ChainRecord? = log.head()
             val rec = Chain.build(head, type, summary, payload, ts)
-            if (log.appendIfHead(head?.seq ?: 0L, head?.hash, rec)) return
+            if (log.appendIfHead(head?.seq ?: 0L, head?.hash, rec)) return rec
         }
         throw IllegalStateException("could not write to the ledger")
     }

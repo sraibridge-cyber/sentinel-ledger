@@ -1,0 +1,41 @@
+# Copy to .github/workflows/sentinel-android.yml to enable. Builds the debug app and runs tests.
+# Publishes nothing: no release, no tag.
+name: Sentinel Ledger debug build
+on:
+  push:
+    branches: [ 'feat/**' ]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Privacy checks
+        run: bash scripts/check-privacy.sh
+      - name: Install SDK packages
+        run: |
+          SDKMANAGER=$(ls -1 "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -n 1)
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Unit tests and debug APK
+        run: gradle :android:testDebugUnitTest :android:assembleDebug --no-daemon
+      - name: Check the built manifest declares no INTERNET
+        run: |
+          set -euo pipefail
+          AAPT2="$ANDROID_HOME/build-tools/34.0.0/aapt2"
+          "$AAPT2" dump permissions android/build/outputs/apk/debug/android-debug.apk | tee perms.txt
+          if grep -q 'android.permission.INTERNET' perms.txt; then echo "::error::INTERNET declared"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-ledger-debug-apk
+          path: android/build/outputs/apk/debug/android-debug.apk
+          retention-days: 30
